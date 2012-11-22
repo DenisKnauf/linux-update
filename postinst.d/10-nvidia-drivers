@@ -1,3 +1,8 @@
 #!/usr/bin/env sh
+
+[ -e "$0.disabled" ] && exit 0
+which make >/dev/null 2>&1 || exit 0
+[ -d "/usr/src/nvidia-drivers" ] || exit 0
+
 echo Build NVIDIA module... >&2
 exec make -C /usr/src/nvidia-drivers SYSSRC="/lib/modules/$1/build" install
