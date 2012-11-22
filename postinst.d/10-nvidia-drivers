@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+echo Build NVIDIA module... >&2
+exec make -C /usr/src/nvidia-drivers SYSSRC="/lib/modules/$1/build" install

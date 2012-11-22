@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+echo "dracut..." >&2
+exec dracut --force --kver "$1"
