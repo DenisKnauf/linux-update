@@ -1,0 +1,177 @@
+#!/bin/sh
+
+[ 0 = "`id -u`" ] || exec sudo http_proxy="$http_proxy" "$0" "$@"
+
+SOURCE_BASE_DIR=/usr/src
+SOURCE_BASE_URI=http://www.kernel.org/pub/linux/kernel/v3.x/
+
+usage() {
+	echo "Usage: $0 $(help | sed -ne '3,$s/^\([^'"`printf '\t'`"']*\)'"`printf '\t'`"'.*$/\1/p' | tr '\n' '|' | sed -e 's/|/ | /g;s/ | $//')"
+}
+
+help() {
+	cat <<EOH
+$0 Command
+possible commands:
+help			Print this help message
+latest_stable		prints the latest stable available version on kernel.org
+latest_fetched		prints the latest fetched version
+update_available	prints the latest stable available version on kernel.org if it isn't fetched yet
+fetched			prints all fetched versions
+download_uri [V]	prints the uri of V (default: latest_stable)
+download [V]		downloads the kernel of V (default: latest_stable)
+unpack			simple unpack with unxz and tar in \$SOURCE_BASE_DIR (default: $SOURCE_BASE_DIR)
+fetch [V]		downloads and unpack the kernel of V (default: latest_stable)
+update			downloads and unpack the latest_stable kernel if it isn't fetched yet
+EOH
+}
+
+cache() {
+	eval "$1() { echo '$(echo "$2" | sed -e 's/'\''/'"'\\\''"'/g')'; }"
+	$1
+}
+
+_latest_stable() {
+	curl -s http://www.kernel.org/kdist/finger_banner | sed -E -ne 's/^The latest stable .* version of the Linux kernel is: *([0-9.]*).*/\1/p' | head -1
+}
+
+latest_stable() {
+	cache latest_stable "`_latest_stable`"
+}
+
+print_version() {
+	while read v d
+	do
+		echo "$v"
+	done
+}
+
+print_dir() {
+	while read v d
+	do
+		echo "$d"
+	done
+}
+
+kernelversion_of() {
+	make -isC "$1" kernelversion
+}
+
+fetched() {
+	for d in "${SOURCE_BASE_DIR}"/linux-*
+	do
+		v="`kernelversion_of "$d"`"
+		if [ "$v" ]
+		then
+			echo "$v $d"
+		fi
+	done
+}
+
+latest_version() {
+	sort -rV | head -1
+}
+
+latest_fetched() {
+	fetched | latest_version
+}
+
+is_listed() {
+	awk \""${1}"'"==$1{print$0;exit}'
+}
+
+latest_stable_is_fetched() {
+	fetched | is_listed "`latest_stable`"
+}
+
+update_available() {
+	[ -z "`latest_stable_is_fetched`" ]
+}
+
+download_uri() {
+	echo "${SOURCE_BASE_URI}/linux-${1:-`latest_stable`}.tar.xz"
+}
+
+download() {
+	curl `download_uri "${1}"`
+}
+
+unpack() {
+	unxz | tar -C "${SOURCE_BASE_DIR}" -xf -
+}
+
+fetch() {
+	download | unpack
+}
+
+update() {
+	if update_available
+	then
+		echo Update available: `latest_stable`
+		fetch
+	else
+		echo "Upto date."
+		return 1
+	fi
+}
+
+configs() {
+	fetched | while read v d
+	do
+		[ -e "$d/.config" ] && echo "$v $d"
+	done
+}
+
+has_config() {
+	configs | is_listed "$2"
+}
+
+latest_config() {
+	configs | latest_version
+}
+
+copy_to_dir_config() {
+	cp "${2:-`latest_config | print_dir`}/.config" "${1:-`latest_fetched | print_dir`}"
+}
+
+install_config() {
+	d="${1:-`latest_fetched | print_dir`}"
+	s="${2:-`latest_config | print_dir`}"
+	[ -e "$d/.config" ] || copy_to_dir_config "${d}" "${s}"
+}
+
+oldconfig() {
+	d="${1:-`latest_fetched | print_dir`}"
+	install_config "$d" && make -C "$d" oldconfig
+}
+
+install_all() {
+	d="${1:-`latest_fetched | print_dir`}"
+	oldconfig && make -C "$d" all modules_install install
+}
+
+cmd="$1"
+shift
+
+case "$cmd" in
+latest_stable) latest_stable ;;
+fetched) fetched ;;
+latest_fetched) latest_fetched ;;
+update_available) update_available ;;
+fetch) fetch "$@" ;;
+download_uri) download_uri "$@" ;;
+download) download "$@" ;;
+unpack) unpack ;;
+update) update ;;
+help|--help|-h) help ;;
+usage) usage ;;
+latest_stable_is_fetched) latest_stable_is_fetched ;;
+oldconfig) oldconfig "$@" ;;
+configs) configs ;;
+install) install_all ;;
+all) update && install_all ;;
+*)
+	usage >&2
+	exit 1
+	;;
+esac
