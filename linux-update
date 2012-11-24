@@ -57,6 +57,14 @@ kernelversion_of() {
 	make -isC "$1" kernelversion
 }
 
+dir_of() {
+	w="${1}"
+	fetched | while read v d
+	do
+		[ "$w" = "$v" ] && echo "$d"
+	done
+}
+
 fetched() {
 	for d in "${SOURCE_BASE_DIR}"/linux-*
 	do
@@ -93,6 +101,7 @@ download_uri() {
 }
 
 download() {
+	echo "Download $1" >&2
 	curl `download_uri "${1}"`
 }
 
@@ -101,7 +110,7 @@ unpack() {
 }
 
 fetch() {
-	download | unpack
+	download "${1}" | unpack
 }
 
 update() {
@@ -146,8 +155,13 @@ oldconfig() {
 }
 
 install_all() {
+	echo "=====-- $1 --====="
 	d="${1:-`latest_fetched | print_dir`}"
-	oldconfig && make -C "$d" all modules_install install
+	echo "===== $d ====="
+	oldconfig "$d" && \
+		make -j3 -C "$d" all && \
+		make -j3 -C "$d" modules_install && \
+		make -j3 -C "$d" install
 }
 
 cmd="$1"
@@ -166,10 +180,10 @@ update) update ;;
 help|--help|-h) help ;;
 usage) usage ;;
 latest_stable_is_fetched) latest_stable_is_fetched ;;
-oldconfig) oldconfig "$@" ;;
-configs) configs ;;
-install) install_all ;;
-all) update && install_all ;;
+oldconfig) oldconfig "${1:+`dir_of "$1"`}" ;;
+configs) configs "${1:+`dir_of "$1"`}" ;;
+install) install_all "${1:+`dir_of "$1"`}" ;;
+all) update "$1" && install_all "${1:+`dir_of "$1"`}" ;;
 *)
 	usage >&2
 	exit 1
