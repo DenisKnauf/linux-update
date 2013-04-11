@@ -9,20 +9,10 @@ usage() {
 	echo "Usage: $0 $(help | sed -ne '3,$s/^\([^'"`printf '\t'`"']*\)'"`printf '\t'`"'.*$/\1/p' | tr '\n' '|' | sed -e 's/|/ | /g;s/ | $//')"
 }
 
-help() {
+help() { #@ Print this help message
 	cat <<EOH
 $0 Command
 possible commands:
-help			Print this help message
-latest_stable		prints the latest stable available version on kernel.org
-latest_fetched		prints the latest fetched version
-update_available	prints the latest stable available version on kernel.org if it isn't fetched yet
-fetched			prints all fetched versions
-download_uri [V]	prints the uri of V (default: latest_stable)
-download [V]		downloads the kernel of V (default: latest_stable)
-unpack			simple unpack with unxz and tar in \$SOURCE_BASE_DIR (default: $SOURCE_BASE_DIR)
-fetch [V]		downloads and unpack the kernel of V (default: latest_stable)
-update			downloads and unpack the latest_stable kernel if it isn't fetched yet
 EOH
 }
 
@@ -35,7 +25,7 @@ _latest_stable() {
 	curl -s http://www.kernel.org/kdist/finger_banner | sed -E -ne 's/^The latest stable .* version of the Linux kernel is: *([0-9.]*).*/\1/p' | head -1
 }
 
-latest_stable() {
+latest_stable() { #@ prints the latest stable available version on kernel.org
 	cache latest_stable "`_latest_stable`"
 }
 
@@ -65,7 +55,7 @@ dir_of() {
 	done
 }
 
-fetched() {
+fetched() { #@ prints all fetched versions
 	for d in "${SOURCE_BASE_DIR}"/linux-*
 	do
 		v="`kernelversion_of "$d"`"
@@ -80,7 +70,7 @@ latest_version() {
 	sort -rV | head -1
 }
 
-latest_fetched() {
+latest_fetched() { #@ prints the latest fetched version
 	fetched | latest_version
 }
 
@@ -92,28 +82,28 @@ latest_stable_is_fetched() {
 	fetched | is_listed "`latest_stable`"
 }
 
-update_available() {
+update_available() { #@ prints the latest stable available version on kernel.org if it isn't fetched yet
 	[ -z "`latest_stable_is_fetched`" ]
 }
 
-download_uri() {
+download_uri() { #@ [V] prints the uri of V (default: latest_stable)
 	echo "${SOURCE_BASE_URI}/linux-${1:-`latest_stable`}.tar.xz"
 }
 
-download() {
+download() { #@ [V] downloads the kernel of V (default: latest_stable)
 	echo "Download $1" >&2
 	curl `download_uri "${1}"`
 }
 
-unpack() {
+unpack() { #@ simple unpack with unxz and tar in \$SOURCE_BASE_DIR (default: $SOURCE_BASE_DIR)
 	unxz | tar -C "${SOURCE_BASE_DIR}" -xf -
 }
 
-fetch() {
+fetch() { #@ [V] downloads and unpack the kernel of V (default: latest_stable)
 	download "${1}" | unpack
 }
 
-update() {
+update() { #@ downloads and unpack the latest_stable kernel if it isn't fetched yet
 	if update_available
 	then
 		echo Update available: `latest_stable`
@@ -131,11 +121,11 @@ configs() {
 	done
 }
 
-has_config() {
+has_config() { #@ [V] This kernel has a config?
 	configs | is_listed "$2"
 }
 
-latest_config() {
+latest_config() { #@ Which is the latest kernel with config?
 	configs | latest_version
 }
 
@@ -143,13 +133,13 @@ copy_to_dir_config() {
 	cp "${2:-`latest_config | print_dir`}/.config" "${1:-`latest_fetched | print_dir`}"
 }
 
-install_config() {
+install_config() { #@ [V] Copys the config of the newest kernel with config to V.
 	d="${1:-`latest_fetched | print_dir`}"
 	s="${2:-`latest_config | print_dir`}"
 	[ -e "$d/.config" ] || copy_to_dir_config "${d}" "${s}"
 }
 
-oldconfig() {
+oldconfig() { #@ [V] Run oldconfig (calls install_config previeusly).
 	d="${1:-`latest_fetched | print_dir`}"
 	install_config "$d" && make -C "$d" oldconfig
 }
