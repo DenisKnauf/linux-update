@@ -61,7 +61,7 @@ module LinuxUpdate
 		end
 
 		def make *opts, &block
-			block ||= lambda {|rd| IO::copy_stream rd, STDOUT } }
+			block ||= lambda {|rd| IO::copy_stream rd, STDOUT }
 			dir = @dir.to_s
 			rd, wr = IO.pipe
 			pid = fork do
@@ -286,7 +286,7 @@ module LinuxUpdate
 		ELD
 		def oldconfig version = nil
 			version, config = base.oldconfig_prepare( version, options[:config])
-			version.import_config config  if nil != options['config'] and config
+			version.import_config config  if nil != options['config'] and config and not version.config.exist?
 			version.oldconfig
 		end
 
@@ -301,7 +301,7 @@ module LinuxUpdate
 		desc 'menuconfig|configure [VERSION]', 'Configure your linux-VERSION. (default: most actual version).'
 		def menuconfig version = nil
 			version, config = base.oldconfig_prepare( version, options[:config])
-			version.import_config config  if nil != options['config'] and config
+			version.import_config config  if nil != options['config'] and config and not version.config.exist?
 			version.menuconfig
 		end
 		map configure: :menuconfig
@@ -321,7 +321,7 @@ module LinuxUpdate
 		desc 'all [VERSION]', 'Will oldconfig, compile and install kernel and modules. See these methods.'
 		def all version = nil
 			version, config = base.oldconfig_prepare( version, options[:config])
-			version.import_config config  if nil != options['config'] and config
+			version.import_config config  if nil != options['config'] and config and not version.config.exist?
 			version.oldconfig
 			version.compile
 			version.install
