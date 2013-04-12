@@ -7,22 +7,52 @@ require 'pathname'
 require 'shell'
 require 'uri'
 
-def load_required_gem lib, gem = nil, name = nil
-	gem ||= lib
-	name ||= gem
-	require lib
-rescue LoadError
-	STDERR.puts <<EOF
-Loading #{name} failed. Please install it first:
-	sudo gem install #{gem}
+class RequiredGems
+	attr_reader :requires, :failed
+	def self.require &block
+		rg = new
+		block.call rg, &rg.method(:push)
+		rg.require
+	end
+
+	def initialize
+		@requires, @failed = [], []
+	end
+
+	def push lib, gem = nil, name = nil
+		gem ||= lib
+		name ||= gem
+		@requires.push [lib, gem, name]
+	end
+
+	def try_require lib
+		require lib
+		true
+	rescue LoadError
+		false
+	end
+
+	def require lib = nil
+		return super lib  if lib # if lib given, require it.
+
+		@failed = @requires.reject {|(lib, _, _)| try_require lib }
+		return  if @failed.empty?
+		STDERR.puts <<EOF
+Loading of #{@failed.map{|(_,_,n)|n}.join ', '} failed.
+Please install if first:
+	sudo gem install #{@failed.map{|(_,g,_)|g}.join ' '}
 EOF
-	raise
+		exit 127
+	end
 end
 
-load_required_gem 'thor', nil, 'Thor'
-load_required_gem 'irb-pager', nil, 'IRB::Pager'
-load_required_gem 'httpclient', nil, 'HTTPClient'
-load_required_gem 'versionomy', nil, 'Versionomy'
+RequiredGems.require do |rg, &push|
+	push[ 'thor', nil, 'Thor']
+	push[ 'irb-pager', nil, 'IRB::Pager']
+	push[ 'httpclient', nil, 'HTTPClient']
+	push[ 'versionomy', nil, 'Versionomy']
+end
+
 
 module LinuxUpdate
 	Release = Struct.new :version, :moniker, :source, :pgp, :released, :gitweb, :changelog, :patch_full, :patch_incremental, :iseol
@@ -149,6 +179,8 @@ module LinuxUpdate
 		end
 		class MakeFailed <Error
 		end
+		class DownloadFailed <Error
+		end
 		attr_reader :releases_uri, :sources_base_dir
 		ReleasesURI = 'https://www.kernel.org/releases.json'
 		SourcesBaseDir = '/usr/src'
@@ -177,7 +209,10 @@ module LinuxUpdate
 		end
 
 		def fetched
-			@fetched ||= Dir[ @sources_base_dir + 'linux-*'].map {|d| Fetched.new d }
+			@fetched ||= Dir[ @sources_base_dir + 'linux-*'].
+				map( &Pathname.method( :new)).
+				select!( &:directory?).
+				map {|d| Fetched.new d }
 		end
 
 		def configured()  fetched.select &:configured?  end
@@ -205,10 +240,19 @@ module LinuxUpdate
 				else raise UnexpectedThingToDownload, "This is no URI, String or Release"
 				end
 			dir = @sources_base_dir
-			::Shell.new.transact do
-				self.verbose = 0
-				chdir dir
-				system( 'curl', uri) | system( 'tar', '-xJf', '-')
+			HTTPClient.new do |hc|
+				hc.get uri do |chunk|
+					p chunk.length
+					next
+					tar_pid = fork do
+						Dir.chdir dir
+						STDIN.reopen rd
+						Kernel.exec 'tar', '--no-ignore-command-error', '-xJf', '-'
+					end
+					Process.waitpid tar_pid
+					tar_status = $?.exitstatus
+					raise DownloadFailed, "Download of #{uri} failed."  unless 0 == curl_status and 0 == tar_status
+				end
 			end
 		end
 
@@ -325,6 +369,16 @@ module LinuxUpdate
 			version.oldconfig
 			version.compile
 			version.install
+		end
+
+		option :any, type: :boolean, aliases: '-a', desc: 'Select any versions.'
+		option :longterm, type: :boolean, aliases: '-o', desc: 'Select long term versions.'
+		option :stable, type: :boolean, aliases: '-s', desc: 'Select stable versions (default).'
+		option :mainline, type: :boolean, aliases: '-m', desc: 'Select mainline versions.'
+		desc 'update [VERSION]', 'Download, compile and install linux-kernel'
+		def update version = nil
+			fetch version
+			all version
 		end
 
 		no_commands do
