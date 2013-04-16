@@ -46,10 +46,32 @@ EOF
 	end
 end
 
-RequiredGems.require do |rg, &push|
+def requires_lib_gem &block
+	requires = []
+	push = lambda {|lib, gem = lib, name = gem| requires.push [lib, gem, name] }
+	block.call &push
+	failed = requires.reject do |(lib, _, _)|
+		begin
+			require lib
+			true
+		rescue LoadError
+			false
+		end
+	end
+	return  if failed.empty?
+	STDERR.puts <<EOF
+Loading of #{failed.map{|(_,_,n)|n}.join ', '} failed.
+Please install if first:
+sudo gem install #{failed.map{|(_,g,_)|g}.join ' '}
+EOF
+	exit 127
+end
+
+requires_lib_gem do |&push|
 	push[ 'thor', nil, 'Thor']
 	push[ 'irb-pager', nil, 'IRB::Pager']
-	push[ 'httpclient', nil, 'HTTPClient']
+	push[ 'active_support/all', 'activesupport', 'ActiveSupport']
+	push[ 'excon', nil, 'Excon']
 	push[ 'versionomy', nil, 'Versionomy']
 end
 
@@ -60,10 +82,10 @@ module LinuxUpdate
 		include Comparable
 		def self.parse json
 			return nil  if json['version'] =~ /^next-/
-			data = members.map {|m| json[m.to_s] }
+				data = members.map {|m| json[m.to_s] }
 			data[0] = Versionomy.parse data[0]
-			data[2] = URI.parse data[2]
-			data[3] = URI.parse data[3]
+			data[2] = URI.parse data[2] rescue
+			data[3] = URI.parse data[3] rescue
 			data[4] = Time.at data[4]['timestamp'].to_i
 			new *data
 		end
@@ -146,6 +168,7 @@ module LinuxUpdate
 		def import_config_from_io( io) open_config('w') {|c| io.each_line {|l| c.print l } } end
 
 		def import_config file_or_io_or_fetched
+			info "Import config #{file_or_io_or_fetched}" 
 			case file_or_io_or_fetched
 			when IO then import_config_from_io file_or_io_or_fetched
 			when Fetched
@@ -156,19 +179,27 @@ module LinuxUpdate
 		end
 
 		def oldconfig
+			info 'make oldconfig'
 			make 'oldconfig'
 		end
 
 		def menuconfig
+			info 'make menuconfig'
 			make 'menuconfig'
 		end
 
 		def compile
+			info 'make all'
 			make 'all'
 		end
 
 		def install
+			info 'make modules_install install'
 			make 'modules_install', 'install'
+		end
+
+		def info text
+			STDERR.puts "[#{version}] #{text}"
 		end
 	end
 
@@ -180,27 +211,38 @@ module LinuxUpdate
 		class MakeFailed <Error
 		end
 		class DownloadFailed <Error
+			def initialize uri
+				super "Download of #{uri} failed."
+			end
 		end
-		attr_reader :releases_uri, :sources_base_dir
+		class UnpackFailed <Error
+			def initialize tarball
+				super "Unpack of #{tarball} failed."
+			end
+		end
+		attr_reader :releases_uri, :sources_base_dir, :cache_dir
 		ReleasesURI = 'https://www.kernel.org/releases.json'
 		SourcesBaseDir = '/usr/src'
+		CacheDir = '/var/cache/linux-update'
 
-		def releases_uri= uri
-			@releases_uri = URI.parse uri.to_s
-		end
-
-		def sources_base_dir= dir
-			@sources_base_dir = Pathname.new dir.to_s
-		end
+		def releases_uri=( uri) @releases_uri = URI.parse uri.to_s end
+		def sources_base_dir=( dir) @sources_base_dir = Pathname.new dir.to_s end
+		def cache_dir=( dir) @cache_dir = Pathname.new dir.to_s end
 
 		def initialize
 			self.releases_uri = ENV['LINUX_RELEASE_URI'] || ReleasesURI
 			self.sources_base_dir = ENV['LINUX_SOURCES_BASE_DIR'] || SourcesBaseDir
+			self.cache_dir = ENV['CacheDir'] || CacheDir
+		end
+
+		def info text
+			STDERR.puts text
 		end
 
 		def releases
 			return @releases  if @releases
-			json = JSON.parse HTTPClient.get_content( @releases_uri)
+			res = Excon.get @releases_uri.to_s, expects: 200
+			json = JSON.parse res.body
 			@releases = json['releases'].map {|r| Release.parse r }.compact
 		end
 
@@ -211,7 +253,7 @@ module LinuxUpdate
 		def fetched
 			@fetched ||= Dir[ @sources_base_dir + 'linux-*'].
 				map( &Pathname.method( :new)).
-				select!( &:directory?).
+				select( &:directory?).
 				map {|d| Fetched.new d }
 		end
 
@@ -221,9 +263,9 @@ module LinuxUpdate
 		def find_fetched_version version
 			case version
 			when Fetched then version
-			when Versionomy then fetched.find {|f| version == f.version }
-			when Release then __callee__ version.version
-			when String then __callee__ Versionomy.parse( version)
+			when Versionomy::Value then fetched.find {|f| version == f.version }
+			when Release then find_fetched_version version.version
+			when String then find_fetched_version Versionomy.parse( version)
 			when nil, false then fetched.max
 			else raise InvalidVersionType, "I know Fetched, Versionomy, Release and String, but what is #{version.class}?"
 			end
@@ -233,32 +275,66 @@ module LinuxUpdate
 			Pathname.new( file.to_s).exist?
 		end
 
-		def download release_or_uri
-			uri = case release_or_uri
-				when Release then release_or_uri.source.to_s
-				when URI, String then release_or_uri.to_s
-				else raise UnexpectedThingToDownload, "This is no URI, String or Release"
-				end
-			dir = @sources_base_dir
-			HTTPClient.new do |hc|
-				hc.get uri do |chunk|
-					p chunk.length
-					next
-					tar_pid = fork do
-						Dir.chdir dir
-						STDIN.reopen rd
-						Kernel.exec 'tar', '--no-ignore-command-error', '-xJf', '-'
+		def format_bytes bytes
+			case bytes
+			when 0...1.kilobyte then "%6dB" % bytes
+			when 0...1.megabyte then "%4dKiB" % (bytes / 1.kilobyte)
+			when 0...1.gigabyte then "%4dMiB" % (bytes / 1.megabyte)
+			when 0...1.terabyte then "%4dGiB" % (bytes / 1.gigabyte)
+			when 0...1.petabyte then "%4dTiB" % (bytes / 1.terabyte)
+			else "%4dEiB" % (bytes / 1.petabyte)
+			end
+		end
+
+		def _download uri, file
+			dest = Pathname.new "#{file}.download"
+			info "Download #{uri} => #{tarball}"
+			if true
+				raise DownloadFailed, uri  unless Kernel.system( 'wget', '-c', '-O', dest.to_s, uri.to_s)
+			else
+				done = dest.size
+				p dest => done
+				dest.open 'a+' do |fd|
+					streamer = lambda do |chunk, remaining, total|
+						fd.write chunk
+						count = total - remaining
+						STDERR.print "\rloading %s/%s % 3d%%\e[J" % [
+							format_bytes(count), format_bytes(total), 100.0*count/total ]
 					end
-					Process.waitpid tar_pid
-					tar_status = $?.exitstatus
-					raise DownloadFailed, "Download of #{uri} failed."  unless 0 == curl_status and 0 == tar_status
+					res = Excon.get uri.to_s,
+						response_block: streamer,
+						expects: 200,
+						headers: {'Range' => "#{done}-" }
 				end
 			end
+			dest.rename file
+		end
+
+		def _unpack tarball, destdir
+			info "Unpack #{tarball} => #{destdir}"
+			unless Kernel.system 'tar', '-C', destdir.to_s, '-xf', tarball.to_s
+				raise UnpackFailed, tarball
+			end
+		end
+
+		def download release_or_uri
+			uri =
+				case release_or_uri
+				when Release then release_or_uri.source
+				when URI, String then URI.parse release_or_uri.to_s
+				else raise UnexpectedThingToDownload, "This is no URI, String or Release"
+				end
+			# We do not understand anything else than operating systems with / as separator
+			@cache_dir.mkdir 0755  unless @cache_dir.exist?
+			tarball = @cache_dir + File.basename( uri.path)
+			_download uri, tarball  unless tarball.exist?
+			_unpack tarball, @sources_base_dir
 		end
 
 		def oldconfig_prepare version = nil, config = nil
 			version = find_fetched_version version
-			config = case config
+			config =
+				case config
 				when lambda {|x| Pathname.new( config.to_s).exist? } then config
 				when nil, false then configured.max.config
 				else find_fetched_version( config).config
@@ -315,7 +391,7 @@ module LinuxUpdate
 		end
 
 		desc 'importconfig [VERSION] [CONFIG]', 'Imports an other config from file or an other source directory. (default: most actual version with config to most actual version).'
-		def importconfig version, config = nil
+		def importconfig version = nil, config = nil
 			version, config = base.oldconfig_prepare( version, options[:config])
 			version.import_config config  if config
 		end
