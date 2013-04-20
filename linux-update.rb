@@ -222,7 +222,7 @@ module LinuxUpdate
 		end
 		attr_reader :releases_uri, :sources_base_dir, :cache_dir
 		ReleasesURI = 'https://www.kernel.org/releases.json'
-		SourcesBaseDir = '/usr/src'
+		SourcesBaseDir = '/usr/src/linux'
 		CacheDir = '/var/cache/linux-update'
 
 		def releases_uri=( uri) @releases_uri = URI.parse uri.to_s end
@@ -288,7 +288,7 @@ module LinuxUpdate
 
 		def _download uri, file
 			dest = Pathname.new "#{file}.download"
-			info "Download #{uri} => #{tarball}"
+			info "Download #{uri} => #{file}"
 			if true
 				raise DownloadFailed, uri  unless Kernel.system( 'wget', '-c', '-O', dest.to_s, uri.to_s)
 			else
@@ -317,6 +317,8 @@ module LinuxUpdate
 			end
 		end
 
+		# returns tarballs-filename (e.g. linux-3.1.0.tar.xz)
+		# unpack-path will be @sources_base_dir, but sources dir is unknown.
 		def download release_or_uri
 			uri =
 				case release_or_uri
@@ -329,6 +331,7 @@ module LinuxUpdate
 			tarball = @cache_dir + File.basename( uri.path)
 			_download uri, tarball  unless tarball.exist?
 			_unpack tarball, @sources_base_dir
+			tarball.basename
 		end
 
 		def oldconfig_prepare version = nil, config = nil
@@ -453,8 +456,10 @@ module LinuxUpdate
 		option :mainline, type: :boolean, aliases: '-m', desc: 'Select mainline versions.'
 		desc 'update [VERSION]', 'Download, compile and install linux-kernel'
 		def update version = nil
-			fetch version
-			all version
+			tarball = fetch version
+			/^linux-(.*)\.tar\./ =~ tarball.basename.to_s
+			# try it with version in tarball's name:
+			all $1
 		end
 
 		no_commands do

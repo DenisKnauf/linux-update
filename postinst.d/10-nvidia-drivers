@@ -1,13 +1,11 @@
 #!/usr/bin/env sh
 
 NVDSRC="${NVDSRC:-/usr/src/nvidia-drivers}"
-[ -e "$0.disabled" ] && exit 0
+[ -e "${0}.disabled" ] && exit 0
 which make >/dev/null 2>&1 || exit 0
-[ -d "$NVDSRC" ] || exit 0
+[ -d "${NVDSRC}" ] || exit 0
 V="${1:-`uname -r`}"
-SYSSRC="/lib/modules/$V/source"
-SYSOUT="/lib/modules/$V/build"
 
-echo Build NVIDIA module... >&2
-cd "$SYSSRC"
-exec make -C "$NVDSRC" SYSOUT="$SYSOUT" SYSSRC="$SYSSRC" module-install
+echo "Build NVIDIA module..." >&2
+cd "${NVDSRC}"
+exec make module-install PWD="${NVDSRC}"
