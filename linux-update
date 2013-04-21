@@ -108,8 +108,18 @@ module LinuxUpdate
 
 	class Fetched
 		attr_reader :dir
-		def initialize dir
-			@dir = Pathname.new dir
+		def initialize( dir) @dir = Pathname.new dir end
+		def config() dir + '.config' end
+		def <=>( other) version <=> other.version end
+		def info( text) STDERR.puts "[#{version}] #{text}" end
+
+		def linux_sources?
+			begin
+				version
+				true
+			rescue Base::MakeFailed
+				false
+			end
 		end
 
 		def make *opts, &block
@@ -138,16 +148,10 @@ module LinuxUpdate
 			end
 		end
 
-		def config
-			dir + '.config'
-		end
-
 		def configured?
 			return @configured  if @configured
 			@configured = config.exist?
 		end
-
-		def <=>( other) version <=> other.version end
 
 		def to_s
 			r = "#{dir}"
@@ -165,7 +169,9 @@ module LinuxUpdate
 			end
 		end
 
-		def import_config_from_io( io) open_config('w') {|c| io.each_line {|l| c.print l } } end
+		def import_config_from_io io
+			open_config('w') {|c| io.each_line {|l| c.print l } }
+		end
 
 		def import_config file_or_io_or_fetched
 			info "Import config #{file_or_io_or_fetched}" 
@@ -194,12 +200,8 @@ module LinuxUpdate
 		end
 
 		def install
-			info 'make modules_install install'
-			make 'modules_install', 'install'
-		end
-
-		def info text
-			STDERR.puts "[#{version}] #{text}"
+			info 'make firmware_install modules_install install'
+			make 'firmware_install', 'modules_install', 'install'
 		end
 	end
 
@@ -207,6 +209,18 @@ module LinuxUpdate
 		class Error <Exception
 		end
 		class InvalidVersionType <Error
+			attr_reader :get
+			def initialize get
+				@get = get
+				super "I know Fetched, Versionomy, Release and String, but what is #{get.class}?"
+			end
+		end
+		class NoLinuxSource <Error
+			attr_reader :get
+			def initialize get
+				@get = get
+				super "Linux sources in #{get} not found."
+			end
 		end
 		class MakeFailed <Error
 		end
@@ -254,20 +268,33 @@ module LinuxUpdate
 			@fetched ||= Dir[ @sources_base_dir + 'linux-*'].
 				map( &Pathname.method( :new)).
 				select( &:directory?).
-				map {|d| Fetched.new d }
+				map {|d| Fetched.new d }.
+				select( &:linux_sources?)
 		end
 
 		def configured()  fetched.select &:configured?  end
 		def unconfigured()  fetched.reject &:configured?  end
 
 		def find_fetched_version version
+			try =
+				lambda do |&e|
+					begin e.call
+					rescue NoLinuxSource
+						false
+					end
+				end
 			case version
-			when Fetched then version
+			when Fetched
+				raise NoLinuxSource, version  unless version.linux_sources?
+				version
 			when Versionomy::Value then fetched.find {|f| version == f.version }
 			when Release then find_fetched_version version.version
-			when String then find_fetched_version Versionomy.parse( version)
+			when Pathname then find_fetched_version Fetched.new( version)
+			when String
+				try.() { find_fetched_version Pathname.new version } or
+				find_fetched_version Versionomy.parse( version)
 			when nil, false then fetched.max
-			else raise InvalidVersionType, "I know Fetched, Versionomy, Release and String, but what is #{version.class}?"
+			else raise InvalidVersionType, version
 			end
 		end
 

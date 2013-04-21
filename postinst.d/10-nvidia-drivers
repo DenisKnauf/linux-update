@@ -5,7 +5,8 @@ NVDSRC="${NVDSRC:-/usr/src/nvidia-drivers}"
 which make >/dev/null 2>&1 || exit 0
 [ -d "${NVDSRC}" ] || exit 0
 V="${1:-`uname -r`}"
+SYSSRC="/lib/modules/${V}/source"
 
 echo "Build NVIDIA module..." >&2
 cd "${NVDSRC}"
-exec make module-install PWD="${NVDSRC}"
+exec make module-install SYSSRC="${SYSSRC}" PWD="${NVDSRC}"
