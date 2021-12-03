@@ -1,7 +1,0 @@
-#!/usr/bin/env sh
-
-[ -e "$0.disabled" ] && exit 0
-which dracut >/dev/null 2>&1 || exit 0
-
-echo "dracut..." >&2
-exec dracut --force --kver "$1"
